@@ -1,3 +1,4 @@
+import SwiftUI
 import UIKit
 
 // MARK: - 1. Data Models
@@ -20,29 +21,22 @@ struct Stroke {
     var tool: ToolType
 }
 
-// MARK: - 2. The Drawing Engine
+// MARK: - 2. The Native iOS Drawing Engine
 class CanvasView: UIView {
     var finishedStrokes: [Stroke] = []
     var currentStroke: Stroke?
     var backgroundImage: UIImage? // The "Dry Ink" buffer
     
-    // MARK: Initialization
     override init(frame: CGRect) {
         super.init(frame: frame)
-        setupView()
-    }
-    
-    required init?(coder: NSCoder) { 
-        super.init(coder: coder)
-        setupView()
-    }
-    
-    private func setupView() {
         self.backgroundColor = .white
         self.isMultipleTouchEnabled = false
     }
     
-    // MARK: Touch Tracking
+    required init?(coder: NSCoder) { 
+        fatalError("init(coder:) has not been implemented") 
+    }
+    
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first else { return }
         let newPoint = TouchPoint(location: touch.location(in: self), pressure: touch.force, timestamp: touch.timestamp)
@@ -73,7 +67,6 @@ class CanvasView: UIView {
         setNeedsDisplay()
     }
     
-    // MARK: Rendering & Math
     private func stampStrokeOntoBackground(stroke: Stroke) {
         let renderer = UIGraphicsImageRenderer(bounds: bounds)
         backgroundImage = renderer.image { _ in
@@ -118,5 +111,34 @@ class CanvasView: UIView {
         }
         stroke.color.setStroke()
         path.stroke()
+    }
+}
+
+// MARK: - 3. The SwiftUI Bridge (Renamed to fix the Playgrounds bug)
+struct MyCanvasWrapper: UIViewRepresentable {
+    func makeUIView(context: Context) -> CanvasView {
+        return CanvasView()
+    }
+    
+    func updateUIView(_ uiView: CanvasView, context: Context) {
+        // No dynamic updates needed right now
+    }
+}
+
+// MARK: - 4. The Main Screen (Renamed to fix the Playgrounds bug)
+struct MyMainScreen: View {
+    var body: some View {
+        MyCanvasWrapper()
+            .ignoresSafeArea() // Stretches the canvas edge-to-edge
+    }
+}
+
+// MARK: - 5. The App Ignition Switch
+@main
+struct MyDrawingApp: App {
+    var body: some Scene {
+        WindowGroup {
+            MyMainScreen()
+        }
     }
 }
