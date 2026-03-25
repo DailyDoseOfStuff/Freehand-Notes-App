@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Windows Drawing Engine</title>
+    <style>
+        /* 1. CSS Setup: Make the canvas fill the screen and stop the browser from scrolling */
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #f0f0f0;
+        }
+        canvas {
+            display: block;
+            background-color: white;
+            /* CRITICAL: touch-action none prevents Windows from panning the page when you draw */
+            touch-action: none; 
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="drawingCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('drawingCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Make the canvas fill the window
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Engine Memory
+        let finishedStrokes = [];
+        let currentStroke = null;
+        let isDrawing = false;
+
+        // Engine Setup
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        // 4. Input Tracking (Pointer events handle Mouse, Touch, AND Stylus!)
+        canvas.addEventListener('pointerdown', (e) => {
+            isDrawing = true;
+            // Capture the first point, including pen pressure if available
+            currentStroke = {
+                color: 'black',
+                width: 3.0,
+                points: [{ x: e.clientX, y: e.clientY, pressure: e.pressure }]
+            };
+        });
+
+        canvas.addEventListener('pointermove', (e) => {
+            if (!isDrawing || !currentStroke) return;
+            
+            // Add new coordinates to the current stroke
+            currentStroke.points.push({ x: e.clientX, y: e.clientY, pressure: e.pressure });
+        });
+
+        canvas.addEventListener('pointerup', (e) => {
+            if (!isDrawing || !currentStroke) return;
+            isDrawing = false;
+            
+            // Save the finished stroke to memory
+            finishedStrokes.push(currentStroke);
+            currentStroke = null;
+        });
+
+        // 5. The Render Loop & Math
+        // requestAnimationFrame runs 60-120 times a second, just like iOS setNeedsDisplay()
+        function render() {
+            // Erase the screen for the new frame
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw history
+            for (let stroke of finishedStrokes) {
+                drawStroke(stroke);
+            }
+
+            // Draw active wet ink
+            if (currentStroke) {
+                drawStroke(currentStroke);
+            }
+
+            // Loop the render function
+            requestAnimationFrame(render);
+        }
+
+        // The exact same Bezier curve math we used in Swift!
+        function drawStroke(stroke) {
+            if (stroke.points.length === 0) return;
+
+            ctx.beginPath();
+            ctx.lineWidth = stroke.width;
+            ctx.strokeStyle = stroke.color;
+            ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+
+            if (stroke.points.length === 2) {
+                // Just 2 points? Draw a straight line
+                ctx.lineTo(stroke.points[1].x, stroke.points[1].y);
+            } else {
+                // Smoothing Magic
+                for (let i = 1; i < stroke.points.length - 1; i++) {
+                    const p0 = stroke.points[i - 1];
+                    const p1 = stroke.points[i];
+                    
+                    // Calculate midpoint
+                    const midX = (p0.x + p1.x) / 2.0;
+                    const midY = (p0.y + p1.y) / 2.0;
+
+                    if (i === 1) {
+                        ctx.lineTo(midX, midY);
+                    } else {
+                        // Bend the curve through the points
+                        ctx.quadraticCurveTo(p0.x, p0.y, midX, midY);
+                    }
+                }
+                // Connect the final point
+                const lastPoint = stroke.points[stroke.points.length - 1];
+                ctx.lineTo(lastPoint.x, lastPoint.y);
+            }
+            ctx.stroke();
+        }
+
+        // Ignite the engine
+        render();
+
+    </script>
+</body>
+</html>
