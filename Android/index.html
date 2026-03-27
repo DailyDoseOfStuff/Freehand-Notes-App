@@ -3,9 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Windows Drawing Engine</title>
+    <title>High-Performance Windows Drawing Engine</title>
     <style>
-        /* 1. CSS Setup: Make the canvas fill the screen and stop the browser from scrolling */
         body, html {
             margin: 0;
             padding: 0;
@@ -14,44 +13,77 @@
             overflow: hidden;
             background-color: #f0f0f0;
         }
+        /* Stack both canvases exactly on top of each other */
         canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
             display: block;
-            background-color: white;
-            /* CRITICAL: touch-action none prevents Windows from panning the page when you draw */
             touch-action: none; 
+        }
+        #bgCanvas {
+            background-color: white;
+            z-index: 1; /* Bottom layer */
             box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        #fgCanvas {
+            background-color: transparent; /* Must be see-through! */
+            z-index: 2; /* Top layer */
         }
     </style>
 </head>
 <body>
 
-    <canvas id="drawingCanvas"></canvas>
+    <canvas id="bgCanvas"></canvas>
+    <canvas id="fgCanvas"></canvas>
+    <button id="undoBtn" style="position: absolute; top: 20px; left: 20px; z-index: 10; padding: 10px 20px; font-size: 16px; cursor: pointer; border-radius: 8px; border: 1px solid #ccc; background: white; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+        ↩ Undo
+    </button>
+    <button id = "redoBtn" style="position: absolute; top: 20px; left: 120px; z-index: 10; padding: 10px 20px; font-size: 16px; cursor: pointer; border-radius: 8px; border: 1px solid black; background: white; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+        ↩ Redo
+    </button>
 
     <script>
-        const canvas = document.getElementById('drawingCanvas');
-        const ctx = canvas.getContext('2d');
-
-        // Make the canvas fill the window
-        function resizeCanvas() {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-        }
-        window.addEventListener('resize', resizeCanvas);
-        resizeCanvas();
+        const bgCanvas = document.getElementById('bgCanvas');
+        const bgCtx = bgCanvas.getContext('2d');
+        
+        const fgCanvas = document.getElementById('fgCanvas');
+        const fgCtx = fgCanvas.getContext('2d');
 
         // Engine Memory
         let finishedStrokes = [];
+        let trashedStrokes = [];
         let currentStroke = null;
         let isDrawing = false;
 
-        // Engine Setup
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
+        // Apply brush settings to a specific canvas context
+        function setupContext(ctx) {
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+        }
 
-        // 4. Input Tracking (Pointer events handle Mouse, Touch, AND Stylus!)
-        canvas.addEventListener('pointerdown', (e) => {
+        // Handle window resizing (HTML canvases wipe themselves clean when resized!)
+        function resizeCanvas() {
+            bgCanvas.width = window.innerWidth;
+            bgCanvas.height = window.innerHeight;
+            fgCanvas.width = window.innerWidth;
+            fgCanvas.height = window.innerHeight;
+            
+            setupContext(bgCtx);
+            setupContext(fgCtx);
+
+            // If the window resizes, we MUST redraw the history onto the background
+            bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+            for (let stroke of finishedStrokes) {
+                drawStroke(bgCtx, stroke);
+            }
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas(); // Call once to set initial size
+
+        // Input Tracking (Attach listeners to the top layer!)
+        fgCanvas.addEventListener('pointerdown', (e) => {
             isDrawing = true;
-            // Capture the first point, including pen pressure if available
             currentStroke = {
                 color: 'black',
                 width: 3.0,
@@ -59,44 +91,40 @@
             };
         });
 
-        canvas.addEventListener('pointermove', (e) => {
+        fgCanvas.addEventListener('pointermove', (e) => {
             if (!isDrawing || !currentStroke) return;
-            
-            // Add new coordinates to the current stroke
             currentStroke.points.push({ x: e.clientX, y: e.clientY, pressure: e.pressure });
         });
 
-        canvas.addEventListener('pointerup', (e) => {
+        fgCanvas.addEventListener('pointerup', (e) => {
             if (!isDrawing || !currentStroke) return;
             isDrawing = false;
             
-            // Save the finished stroke to memory
+            // 1. Stamp the finished stroke permanently onto the background canvas!
+            drawStroke(bgCtx, currentStroke);
+            
+            // 2. Save it to memory (in case we resize the window later)
             finishedStrokes.push(currentStroke);
+            
+            // 3. Clear the active stroke
             currentStroke = null;
         });
 
-        // 5. The Render Loop & Math
-        // requestAnimationFrame runs 60-120 times a second, just like iOS setNeedsDisplay()
+        // The Render Loop: Now heavily optimized!
         function render() {
-            // Erase the screen for the new frame
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // ONLY clear the top transparent glass layer
+            fgCtx.clearRect(0, 0, fgCanvas.width, fgCanvas.height);
 
-            // Draw history
-            for (let stroke of finishedStrokes) {
-                drawStroke(stroke);
-            }
-
-            // Draw active wet ink
+            // ONLY draw the wet ink. We no longer loop through history!
             if (currentStroke) {
-                drawStroke(currentStroke);
+                drawStroke(fgCtx, currentStroke);
             }
 
-            // Loop the render function
             requestAnimationFrame(render);
         }
 
-        // The exact same Bezier curve math we used in Swift!
-        function drawStroke(stroke) {
+        // The Bezier curve math (Notice we now pass in WHICH canvas to draw on)
+        function drawStroke(ctx, stroke) {
             if (stroke.points.length === 0) return;
 
             ctx.beginPath();
@@ -105,32 +133,76 @@
             ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
 
             if (stroke.points.length === 2) {
-                // Just 2 points? Draw a straight line
                 ctx.lineTo(stroke.points[1].x, stroke.points[1].y);
             } else {
-                // Smoothing Magic
                 for (let i = 1; i < stroke.points.length - 1; i++) {
                     const p0 = stroke.points[i - 1];
                     const p1 = stroke.points[i];
                     
-                    // Calculate midpoint
                     const midX = (p0.x + p1.x) / 2.0;
                     const midY = (p0.y + p1.y) / 2.0;
 
                     if (i === 1) {
                         ctx.lineTo(midX, midY);
                     } else {
-                        // Bend the curve through the points
                         ctx.quadraticCurveTo(p0.x, p0.y, midX, midY);
                     }
                 }
-                // Connect the final point
                 const lastPoint = stroke.points[stroke.points.length - 1];
                 ctx.lineTo(lastPoint.x, lastPoint.y);
             }
             ctx.stroke();
         }
 
+        // --- THE UNDO ENGINE ---
+        function undoLastStroke() {
+            // If there's nothing to undo, just stop.
+            if (finishedStrokes.length === 0) return;
+
+            // 1. Throw away the very last stroke from our memory
+            trashedStrokes.push(finishedStrokes.pop());
+
+            // 2. Wipe the background canvas completely clean
+            bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+
+            // 3. Redraw all the remaining strokes instantly
+            for (let stroke of finishedStrokes) {
+                drawStroke(bgCtx, stroke);
+            }
+        }
+
+        function redoLastStroke() {
+            if (trashedStrokes.length == 0 ) return;
+
+            finishedStrokes.push(trashedStrokes.pop());
+
+            bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+
+            for (let stroke of finishedStrokes) {
+                drawStroke(bgCtx, stroke);
+            }
+
+        }
+
+        // Hook up the on-screen button
+        document.getElementById('undoBtn').addEventListener('click', undoLastStroke);
+
+        // Hook up the keyboard (Ctrl + Z on Windows, Cmd + Z on Mac)
+        window.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+                undoLastStroke();
+            }
+        });
+
+        //Hook up the redo button 
+        document.getElementById('redoBtn').addEventListener('click', redoLastStroke);
+
+        //Hook up the keyboard (Ctrl + Y on Windows, Cmd + Y on Mac)
+        window.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+                redoLastStroke();
+            }
+        });
         // Ignite the engine
         render();
 
